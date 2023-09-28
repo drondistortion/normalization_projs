@@ -1,0 +1,6 @@
+/*
+   init devices
+   init settings
+   handle user input
+   handle devices
+   */
