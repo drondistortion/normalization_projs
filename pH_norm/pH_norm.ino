@@ -6,6 +6,11 @@
 #include <iarduino_I2C_4LED.h> // 1.0.2
 #include <BfButton.h>
 
+#define SETTINGS\
+	X(INTERVAL, "I")\
+	X(DURATION, "d")\
+
+constexpr unsigned SETTINGS_TIMEOUT = 10000;
 constexpr unsigned BUTTON_LEFT = 13;
 constexpr unsigned BUTTON_RIGHT = 18;
 constexpr unsigned MB_RX = 25;
@@ -24,7 +29,7 @@ bool g_left_holding = false;
 bool g_right_holding = false;
 unsigned g_count = 0;
 
-float g_ph = 7.1;
+float g_ph_target = 7.1;
 
 iarduino_I2C_4LED disp;
 ModbusClient modbus(Serial2, MB_DE);
@@ -33,6 +38,31 @@ iarduino_MB_pH ph_sensor(modbus);
 
 BfButton leftButton(BfButton::STANDALONE_DIGITAL, BUTTON_LEFT, false, HIGH);
 BfButton rightButton(BfButton::STANDALONE_DIGITAL, BUTTON_RIGHT, false, HIGH);
+
+typedef enum {
+	NORMAL,
+	CHANGE_TARGET,
+	SETTINGS_MENU
+} state_t;
+
+state_t menu_state = NORMAL;
+
+typedef enum {
+#define X(INDEX, STRING) INDEX,
+	SETTINGS
+#undef X
+	N_SETTING
+} settings_t;
+
+settings_t current_item = INTERVAL;
+
+uint16_t settings[N_SETTING]{0};
+
+const char* settings_strings[N_SETTING] = {
+#define X(INDEX, STRING) STRING,
+	SETTINGS
+#undef X
+};
 
 void setup()
 {
@@ -62,10 +92,11 @@ void initButtons()
 void initDisplay()
 {
 	disp.begin();
-	disp.turn(true);
+	disp.turn(1);
+	disp.frequ(3);
 	disp.print(8888);
 	disp.point(0,1);
-	delay(500);
+	delay(1500);
 }
 
 void initModbus()
@@ -76,18 +107,103 @@ void initModbus()
 	ph_sensor.begin();
 }
 
+unsigned long submenu_millis = 0;
+unsigned long enter_submenu_ts = 0;
+
 void handleMenu()
 {
-	if (isLeftPressed() || isLeftHolding())
-		g_count--;
-	if (isRightPressed() || isRightHolding())
-		g_count++;
-	if (areBothHolding())
-		g_count = 0;
+	if (menu_state == NORMAL && g_user_interacted)  // change that
+		menu_state = CHANGE_TARGET;
+	else if (menu_state == CHANGE_TARGET) {
+		handleChangeTargetMenu();
+		exitOnTimeOut();
+	}
+	else if (menu_state == SETTINGS_MENU) {
+		handleSettingsMenu();
+		exitOnTimeOut();
+	}
+}
+
+void handleChangeTargetMenu()
+{
+	if (isLeftPressed() || isLeftHolding()) {
+		submenu_millis = millis();
+		decrementTargetLevel();
+	}
+	if (isRightPressed() || isRightHolding()) {
+		submenu_millis = millis();
+		incrementTargetLevel();
+	}
+
+	if (areBothHolding()) {
+		menu_state = SETTINGS_MENU;
+		enter_submenu_ts = millis();
+	}
+}
+
+void exitOnTimeOut()
+{
+	if (millis() - submenu_millis > SETTINGS_TIMEOUT)
+		menu_state = NORMAL;
+}
+
+void handleSettingsMenu()
+{
+	if (isLeftPressed() || isLeftHolding()) {
+		submenu_millis = millis();
+		selectItem();
+	}
+	if (isRightPressed() || isRightHolding()) {
+		submenu_millis = millis();
+		changeItem();
+	}
+
+	/*
+	if (areBothHolding()) {
+		menu_state = NORMAL;
+	}
+	*/
+}
+
+void selectItem()
+{
+	if (current_item == INTERVAL)
+		current_item = DURATION;
+	else if (current_item == DURATION)
+		current_item = INTERVAL;
+}
+
+void changeItem()
+{
+	switch (current_item) {
+		default: break;
+		case DURATION: changeDuration(); break;
+		case INTERVAL: changeInterval(); break;
+	}
+}
+
+void changeDuration()
+{
+	uint16_t tmp = settings[DURATION];
+	tmp++;
+	if (tmp > 10)
+		tmp = 0;
+	settings[DURATION] = tmp;
+}
+
+void changeInterval()
+{
+	uint16_t tmp = settings[INTERVAL];
+	tmp += 5;
+	if (tmp > 60)
+		tmp = 5;
+	settings[INTERVAL] = tmp;
 }
 
 void loadSettings()
 {
+	settings[INTERVAL] = 30;
+	settings[DURATION] = 1;
 }
 
 void initFileSystem()
@@ -114,21 +230,30 @@ bool isRightPressed()
 	return tmp;
 }
 
-bool right_holding = false;
-bool left_holding = false;
-
 bool isLeftHolding()
 {
-	if (digitalRead(BUTTON_LEFT) == LOW)
+	if (digitalRead(BUTTON_LEFT) == LOW) {
+		g_user_interacted = false;
 		g_left_holding = false;
-	return g_left_holding;
+	}
+
+	if (g_left_holding && repeatInterval())
+		return true;
+	else
+		return false;
 }
 
 bool isRightHolding()
 {
-	if (digitalRead(BUTTON_RIGHT) == LOW)
+	if (digitalRead(BUTTON_RIGHT) == LOW) {
+		g_user_interacted = false;
 		g_right_holding = false;
-	return g_right_holding;
+	}
+
+	if (g_right_holding && repeatInterval())
+		return true;
+	else
+		return false;
 }
 
 bool areBothHolding()
@@ -139,19 +264,37 @@ bool areBothHolding()
 		return false;
 }
 
+unsigned long repeat_millis = 0;
+
 bool repeatInterval()
 {
-	if (millis() - repeatMillis > REPEAT_TIME) {
-		repeatMillis = millis();
+	if (millis() - repeat_millis > REPEAT_TIME) {
+		repeat_millis = millis();
 		return true;
 	}
 	else
 		return false;
 }
 
+String gDisplayString;
+
 void handleDisplay()
 {
-	disp.print(g_count);
+	if (menu_state == NORMAL) {
+		disp.blink(5, false);
+		gDisplayString = " 8_1";
+	}
+	else if (menu_state == CHANGE_TARGET) {
+		disp.blink(5, true);
+		int i = int(g_ph_target);
+		int d = 10*(g_ph_target - i);
+		gDisplayString = (String)" "+i+"_"+d;
+	}
+	else if (menu_state == SETTINGS_MENU) {
+		disp.blink(5, false);
+		gDisplayString = String(settings_strings[current_item]) +" "+ String(settings[current_item]);
+	}
+	disp.print(gDisplayString);
 }
 
 void handleRig()
@@ -162,6 +305,16 @@ void handleRig()
 	//delay(1000);
 }
 
+void incrementTargetLevel()
+{
+	g_ph_target += 0.1;
+}
+
+void decrementTargetLevel()
+{
+	g_ph_target -= 0.1;
+}
+
 void ARDUINO_ISR_ATTR buttonPressed()
 {
 	g_user_interacted = true;
@@ -170,15 +323,17 @@ void ARDUINO_ISR_ATTR buttonPressed()
 void leftPressHandler(BfButton* button, BfButton::press_pattern_t pattern)
 {
 	switch (pattern) {
-		case BfButton::SINGLE_PRESS: g_left_pressed = true;
-		case BfButton::LONG_PRESS: left_holding = true;
+		default: break;
+		case BfButton::SINGLE_PRESS: g_left_pressed = true; break;
+		case BfButton::LONG_PRESS: g_left_holding = true; repeat_millis = millis(); break;
 	}
 }
 
 void rightPressHandler(BfButton* button, BfButton::press_pattern_t pattern)
 {
 	switch (pattern) {
-		case BfButton::SINGLE_PRESS: g_right_pressed = true;
-		case BfButton::LONG_PRESS: right_holding = true;
+		default: break;
+		case BfButton::SINGLE_PRESS: g_right_pressed = true; break;
+		case BfButton::LONG_PRESS: g_right_holding = true; repeat_millis = millis(); break;
 	}
 }
