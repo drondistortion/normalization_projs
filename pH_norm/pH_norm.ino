@@ -11,7 +11,7 @@ constexpr unsigned BUTTON_RIGHT = 18;
 constexpr unsigned MB_RX = 25;
 constexpr unsigned MB_TX = 26;
 constexpr unsigned MB_DE = 32;
-constexpr unsigned DEBOUNCE_TIME = 20;
+constexpr unsigned DEBOUNCE_TIME = 50;
 constexpr unsigned HOLD_TIME = 1000;
 constexpr unsigned REPEAT_TIME = 200;
 
@@ -62,7 +62,7 @@ void initDisplay()
 	disp.begin();
 	disp.turn(true);
 	disp.print(8888);
-
+	disp.point(0,1);
 }
 
 void initModbus()
@@ -75,9 +75,9 @@ void initModbus()
 
 void handleMenu()
 {
-	if (g_left_released)
+	if (g_left_released || g_left_holding)
 		g_count--;
-	if (g_right_released)
+	if (g_right_released || g_right_holding)
 		g_count++;
 }
 
@@ -93,17 +93,31 @@ void handleInput()
 {
 	leftButton.loop();
 	rightButton.loop();
-	if (isPressed(leftButton) || isHolding(leftButton) && repeatInterval())
+
+	if (isPressed(leftButton))
 		g_left_pressed = true;
 	else
 		g_left_pressed = false;
 
-	if (isPressed(rightButton) || isHolding(rightButton) && repeatInterval())
+	if (isHolding(leftButton) && repeatInterval())
+		g_left_holding = true;
+	else
+		g_left_holding = false;
+
+	if (isPressed(rightButton))
 		g_right_pressed = true;
 	else
 		g_right_pressed = false;
 
-	if (isPressed(rightButton) && isPressed(leftButton) && isHolding(leftButton) && isHolding(rightButton))
+	if (isHolding(rightButton) && repeatInterval())
+		g_right_holding = true;
+	else
+		g_right_holding = false;
+
+	g_left_released = isReleased(leftButton);
+	g_right_released = isReleased(rightButton);
+
+	if (isHolding(leftButton) && isHolding(rightButton))
 		g_count = 0;
 }
 
@@ -116,6 +130,16 @@ bool isPressed(ezButton& button)
 		return true;
 	}
 	else
+		return false;
+}
+
+bool isReleased(ezButton& button)
+{
+	if (button.isReleased() && button.getState() == LOW) {
+		holdMillis = millis();
+		return true;
+	}
+	else 
 		return false;
 }
 
