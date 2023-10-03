@@ -4,7 +4,7 @@
 #include <iarduino_MB_Pump.h> // 1.0.3
 #include <iarduino_MB_pH.h> // 1.1.3
 #include <iarduino_I2C_4LED.h> // 1.0.2
-#include <ezButton.h>
+#include <BfButton.h>
 
 constexpr unsigned BUTTON_LEFT = 13;
 constexpr unsigned BUTTON_RIGHT = 18;
@@ -24,13 +24,15 @@ bool g_left_holding = false;
 bool g_right_holding = false;
 unsigned g_count = 0;
 
+float g_ph = 7.1;
+
 iarduino_I2C_4LED disp;
 ModbusClient modbus(Serial2, MB_DE);
 iarduino_MB_Pump pump(modbus);
 iarduino_MB_pH ph_sensor(modbus);
 
-ezButton leftButton(BUTTON_LEFT, INPUT);
-ezButton rightButton(BUTTON_RIGHT, INPUT);
+BfButton leftButton(BfButton::STANDALONE_DIGITAL, BUTTON_LEFT, false, HIGH);
+BfButton rightButton(BfButton::STANDALONE_DIGITAL, BUTTON_RIGHT, false, HIGH);
 
 void setup()
 {
@@ -51,8 +53,8 @@ void loop()
 
 void initButtons()
 {
-	leftButton.setDebounceTime(DEBOUNCE_TIME);
-	rightButton.setDebounceTime(DEBOUNCE_TIME);	
+	leftButton.onPress(leftPressHandler).onPressFor(leftPressHandler, HOLD_TIME);
+	rightButton.onPress(rightPressHandler).onPressFor(rightPressHandler, HOLD_TIME);
 	attachInterrupt(BUTTON_LEFT, buttonPressed, RISING);
 	attachInterrupt(BUTTON_RIGHT, buttonPressed, RISING);
 }
@@ -63,6 +65,7 @@ void initDisplay()
 	disp.turn(true);
 	disp.print(8888);
 	disp.point(0,1);
+	delay(500);
 }
 
 void initModbus()
@@ -75,10 +78,12 @@ void initModbus()
 
 void handleMenu()
 {
-	if (g_left_released || g_left_holding)
+	if (isLeftPressed() || isLeftHolding())
 		g_count--;
-	if (g_right_released || g_right_holding)
+	if (isRightPressed() || isRightHolding())
 		g_count++;
+	if (areBothHolding())
+		g_count = 0;
 }
 
 void loadSettings()
@@ -91,76 +96,45 @@ void initFileSystem()
 
 void handleInput()
 {
-	leftButton.loop();
-	rightButton.loop();
+	leftButton.read();
+	rightButton.read();
+}
 
-	if (isPressed(leftButton))
-		g_left_pressed = true;
-	else
-		g_left_pressed = false;
+bool isLeftPressed()
+{
+	bool tmp = g_left_pressed;
+	g_left_pressed = false;
+	return tmp;
+}
 
-	if (isHolding(leftButton) && repeatInterval())
-		g_left_holding = true;
-	else
+bool isRightPressed()
+{
+	bool tmp = g_right_pressed;
+	g_right_pressed = false;
+	return tmp;
+}
+
+bool right_holding = false;
+bool left_holding = false;
+
+bool isLeftHolding()
+{
+	if (digitalRead(BUTTON_LEFT) == LOW)
 		g_left_holding = false;
+	return g_left_holding;
+}
 
-	if (isPressed(rightButton))
-		g_right_pressed = true;
-	else
-		g_right_pressed = false;
-
-	if (isHolding(rightButton) && repeatInterval())
-		g_right_holding = true;
-	else
+bool isRightHolding()
+{
+	if (digitalRead(BUTTON_RIGHT) == LOW)
 		g_right_holding = false;
-
-	g_left_released = isReleased(leftButton);
-	g_right_released = isReleased(rightButton);
-
-	if (isHolding(leftButton) && isHolding(rightButton))
-		g_count = 0;
+	return g_right_holding;
 }
 
-unsigned long holdMillis = 0;
-
-bool isPressed(ezButton& button)
+bool areBothHolding()
 {
-	if (button.isPressed() && button.getState() == HIGH) {
-		holdMillis = millis();
+	if (g_right_holding && g_left_holding)
 		return true;
-	}
-	else
-		return false;
-}
-
-bool isReleased(ezButton& button)
-{
-	if (button.isReleased() && button.getState() == LOW) {
-		holdMillis = millis();
-		return true;
-	}
-	else 
-		return false;
-}
-
-bool isHolding(ezButton& button)
-{
-	if (button.getState() == HIGH && millis() - holdMillis > HOLD_TIME) { 
-		return true;
-	}
-	else {
-		return false;
-	}
-}
-
-unsigned long repeatMillis = 0;
-
-bool repeatInterval()
-{
-	if (millis() - repeatMillis > REPEAT_TIME) {
-		repeatMillis = millis();
-		return true;
-	}
 	else
 		return false;
 }
@@ -181,4 +155,20 @@ void handleRig()
 void ARDUINO_ISR_ATTR buttonPressed()
 {
 	g_user_interacted = true;
+}
+
+void leftPressHandler(BfButton* button, BfButton::press_pattern_t pattern)
+{
+	switch (pattern) {
+		case BfButton::SINGLE_PRESS: g_left_pressed = true;
+		case BfButton::LONG_PRESS: left_holding = true;
+	}
+}
+
+void rightPressHandler(BfButton* button, BfButton::press_pattern_t pattern)
+{
+	switch (pattern) {
+		case BfButton::SINGLE_PRESS: g_right_pressed = true;
+		case BfButton::LONG_PRESS: right_holding = true;
+	}
 }
