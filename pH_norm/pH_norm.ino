@@ -139,6 +139,16 @@ bool areBothHolding()
 		return false;
 }
 
+bool repeatInterval()
+{
+	if (millis() - repeatMillis > REPEAT_TIME) {
+		repeatMillis = millis();
+		return true;
+	}
+	else
+		return false;
+}
+
 void handleDisplay()
 {
 	disp.print(g_count);
