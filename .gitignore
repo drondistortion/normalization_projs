@@ -1,0 +1,15 @@
+.*.sw*
+*.tar.gz
+*.bin
+*.vim
+*.txt
+json.hpp
+data/*.h
+data/old/*
+local.sh
+upload.sh
+ver.sh
+verfile
+build/
+.DS_Store
+password.h
