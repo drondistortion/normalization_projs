@@ -1,8 +1,10 @@
 .*.sw*
 *.tar.gz
-*.bin
-*.vim
-*.txt
+.*.bin
+.*.elf
+.*.map
+.*.vim
+.*.txt
 json.hpp
 data/*.h
 data/old/*
@@ -10,6 +12,6 @@ local.sh
 upload.sh
 ver.sh
 verfile
-build/
+build
 .DS_Store
 password.h
