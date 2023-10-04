@@ -2,14 +2,31 @@
 // arduino ide - 1.8.19
 #include <iarduino_Modbus.h> // 1.0.1
 #include <iarduino_MB_Pump.h> // 1.0.3
-#include <iarduino_MB_pH.h> // 1.1.3
+#include <iarduino_MB_pH.h> // 1.2.3
 #include <iarduino_I2C_4LED.h> // 1.0.2
 #include <BfButton.h>
 
-#define SETTINGS\
-	X(INTERVAL, "I")\
-	X(DURATION, "d")\
+#define ALL_SEGMENTS 5
 
+#define SETTINGS\
+	X(PUMP_TIME, "Pt:")\
+	X(INTERVAL, "nt:")\
+	X(PAUSE, "Pd:")\
+
+typedef uint16_t setting_t;
+
+constexpr float MAX_PH_ALLOWED = 8.0;
+constexpr float MIN_PH_ALLOWED = 3.0;
+constexpr setting_t DEFAULT_PUMP_TIME = 10;
+constexpr setting_t DEFAULT_INTERVAL = 30;
+constexpr setting_t INTERVAL_DELTA = 5;
+constexpr setting_t DEFAULT_PAUSE = 1;
+constexpr setting_t MAX_PUMP_TIME = 90;
+constexpr setting_t PUMP_TIME_ACCEL = 10;
+constexpr setting_t PUMP_TIME_HIGH_DELTA = 10;
+constexpr setting_t MAX_ALLOWED_PAUSE = 10;
+constexpr setting_t MAX_ALLOWED_INTERVAL = 90;
+constexpr setting_t MIN_ALLOWED_ITERVAL = 5;
 constexpr unsigned SETTINGS_TIMEOUT = 10000;
 constexpr unsigned BUTTON_LEFT = 13;
 constexpr unsigned BUTTON_RIGHT = 18;
@@ -52,11 +69,22 @@ typedef enum {
 	SETTINGS
 #undef X
 	N_SETTING
-} settings_t;
+} settings_state_t;
 
-settings_t current_item = INTERVAL;
+settings_state_t& operator++(settings_state_t& s)
+{
+	switch (s) {
+		default:
+#define X(INDEX, STRING) \
+		case INDEX: s = static_cast<settings_state_t>(INDEX + 1); s == N_SETTING ? s = PUMP_TIME : 0; return s;
+			    SETTINGS
+#undef X
+	}
+}
 
-uint16_t settings[N_SETTING]{0};
+settings_state_t current_item = PUMP_TIME;
+
+setting_t settings[N_SETTING]{0};
 
 const char* settings_strings[N_SETTING] = {
 #define X(INDEX, STRING) STRING,
@@ -109,14 +137,19 @@ void initModbus()
 
 unsigned long submenu_millis = 0;
 unsigned long enter_submenu_ts = 0;
+bool g_already_in_settings = false;
 
 void handleMenu()
 {
-	if (menu_state == NORMAL && g_user_interacted)  // change that
+	if (menu_state == NORMAL && g_user_interacted) {  // change that
 		menu_state = CHANGE_TARGET;
+		submenu_millis = millis();
+		g_already_in_settings = false;
+	}
 	else if (menu_state == CHANGE_TARGET) {
 		handleChangeTargetMenu();
 		exitOnTimeOut();
+		g_already_in_settings = false;
 	}
 	else if (menu_state == SETTINGS_MENU) {
 		handleSettingsMenu();
@@ -141,14 +174,16 @@ void handleChangeTargetMenu()
 	}
 }
 
-void exitOnTimeOut()
-{
-	if (millis() - submenu_millis > SETTINGS_TIMEOUT)
-		menu_state = NORMAL;
-}
 
 void handleSettingsMenu()
 {
+	if (!isLeftReleased() && !isRightReleased() && !g_already_in_settings) {
+		delay(200);
+		return;
+	}
+
+	g_already_in_settings = true;
+
 	if (isLeftPressed() || isLeftHolding()) {
 		submenu_millis = millis();
 		selectItem();
@@ -158,52 +193,85 @@ void handleSettingsMenu()
 		changeItem();
 	}
 
-	/*
 	if (areBothHolding()) {
 		menu_state = NORMAL;
+		g_already_in_settings = false;
 	}
-	*/
+}
+
+void exitOnTimeOut()
+{
+	if (millis() - submenu_millis > SETTINGS_TIMEOUT)
+		menu_state = NORMAL;
 }
 
 void selectItem()
 {
-	if (current_item == INTERVAL)
-		current_item = DURATION;
-	else if (current_item == DURATION)
-		current_item = INTERVAL;
+	++current_item;
+	if (current_item > N_SETTING)
+		current_item = PUMP_TIME;
 }
 
 void changeItem()
 {
 	switch (current_item) {
 		default: break;
-		case DURATION: changeDuration(); break;
+		case PUMP_TIME: changePumpTime(); break;
+		case PAUSE: changePause(); break;
 		case INTERVAL: changeInterval(); break;
 	}
 }
 
-void changeDuration()
+void incrementTargetLevel()
 {
-	uint16_t tmp = settings[DURATION];
+	g_ph_target += 0.1;
+	if (g_ph_target > MAX_PH_ALLOWED)
+		g_ph_target = MAX_PH_ALLOWED;
+}
+
+void decrementTargetLevel()
+{
+	g_ph_target -= 0.1;
+	if (g_ph_target < MIN_PH_ALLOWED)
+		g_ph_target = MIN_PH_ALLOWED;
+}
+
+void changePumpTime()
+{
+	static setting_t delta = 1;
+	setting_t tmp = settings[PUMP_TIME];
+	if (tmp + delta > PUMP_TIME_ACCEL)
+		delta = PUMP_TIME_HIGH_DELTA;
+	if (tmp + delta > MAX_PUMP_TIME) {
+		tmp = delta = 1;
+	}
+	tmp += delta;
+	settings[PUMP_TIME] = tmp;
+}
+
+void changePause()
+{
+	setting_t tmp = settings[PAUSE];
 	tmp++;
-	if (tmp > 10)
+	if (tmp > MAX_ALLOWED_PAUSE)
 		tmp = 0;
-	settings[DURATION] = tmp;
+	settings[PAUSE] = tmp;
 }
 
 void changeInterval()
 {
-	uint16_t tmp = settings[INTERVAL];
-	tmp += 5;
-	if (tmp > 60)
-		tmp = 5;
+	setting_t tmp = settings[INTERVAL];
+	tmp += INTERVAL_DELTA;
+	if (tmp > MAX_ALLOWED_INTERVAL)
+		tmp = MIN_ALLOWED_ITERVAL;
 	settings[INTERVAL] = tmp;
 }
 
 void loadSettings()
 {
-	settings[INTERVAL] = 30;
-	settings[DURATION] = 1;
+	settings[PUMP_TIME] = DEFAULT_PUMP_TIME;
+	settings[INTERVAL] = DEFAULT_INTERVAL;
+	settings[PAUSE] = DEFAULT_PAUSE;
 }
 
 void initFileSystem()
@@ -256,6 +324,22 @@ bool isRightHolding()
 		return false;
 }
 
+bool isLeftReleased()
+{
+	if (digitalRead(BUTTON_LEFT) == LOW)
+		return true;
+	else
+		return false;
+}
+
+bool isRightReleased()
+{
+	if (digitalRead(BUTTON_RIGHT) == LOW)
+		return true;
+	else
+		return false;
+}
+
 bool areBothHolding()
 {
 	if (g_right_holding && g_left_holding)
@@ -281,18 +365,20 @@ String gDisplayString;
 void handleDisplay()
 {
 	if (menu_state == NORMAL) {
-		disp.blink(5, false);
+		disp.blink(ALL_SEGMENTS, false);
 		gDisplayString = " 8_1";
 	}
 	else if (menu_state == CHANGE_TARGET) {
-		disp.blink(5, true);
+		disp.blink(ALL_SEGMENTS, true);
 		int i = int(g_ph_target);
 		int d = 10*(g_ph_target - i);
 		gDisplayString = (String)" "+i+"_"+d;
 	}
 	else if (menu_state == SETTINGS_MENU) {
-		disp.blink(5, false);
-		gDisplayString = String(settings_strings[current_item]) +" "+ String(settings[current_item]);
+		disp.blink(ALL_SEGMENTS, false);
+		setting_t curr_setting = settings[current_item];
+		String disp_setting = curr_setting >= 10 ? String(curr_setting) : " " + String(curr_setting);
+		gDisplayString = String(settings_strings[current_item]) + disp_setting;
 	}
 	disp.print(gDisplayString);
 }
@@ -303,16 +389,6 @@ void handleRig()
 	//Serial.println(pump.getID());
 	//disp.print(1111);
 	//delay(1000);
-}
-
-void incrementTargetLevel()
-{
-	g_ph_target += 0.1;
-}
-
-void decrementTargetLevel()
-{
-	g_ph_target -= 0.1;
 }
 
 void ARDUINO_ISR_ATTR buttonPressed()
